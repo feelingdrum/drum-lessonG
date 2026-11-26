@@ -183,7 +183,7 @@ body.dragging{user-select:none;-webkit-user-select:none}
     <label>起始位置（秒）</label><input id="offTry" type="number" step="0.01" value="0">
     <p><button class="primary" id="goTry" style="width:100%">載入測試（電腦檔案）</button></p>
     <hr>
-    <p style="font-size:12px;color:#166534;margin:6px 0">② 要給學生用：先把 GP 檔上傳到網站的 songs 資料夾，再填路徑，用上面的 YouTube 網址與起始位置載入，載入後按「學生連結 / QR Code」。</p>
+    <p style="font-size:12px;color:#166534;margin:6px 0">② 要給學生用：先把 GP 檔上傳到網站的 songs 資料夾，再填路徑（YouTube 網址選填，沒填則自動用譜面鼓聲播放），載入後按「學生連結 / QR Code」。</p>
     <label>網站上的 GP 路徑</label><input id="siteGp" placeholder="songs/HandClap.gp">
     <p><button class="success" id="goSite" style="width:100%">載入網站上的 GP（可做學生連結）</button></p>
   </details>
@@ -293,7 +293,7 @@ body.dragging{user-select:none;-webkit-user-select:none}
           </div>
 
           <div id="hint">
-            <span style="float:right;color:#999;font-size:11px">介面 v7.2</span>
+            <span style="float:right;color:#999;font-size:11px">介面 v7.3</span>
             點擊樂譜可跳轉；電腦拖曳或開啟「觸控框選」後手指拖曳可選取循環小節；播放時僅保留核心四鍵以放大譜面。
           </div>
         </div>
@@ -1023,7 +1023,13 @@ function loadSong(s) {
   offset = Number(s.offset) || 0; $("#offset").value = offset;
   lastGp = s.gp;
 
-  if (s.mp3 && !s.yt && !src.mp3) setSources({ yt: false, mp3: true }, false);
+  const hasYt = Boolean(ytId(s.yt));
+  const hasMp3 = Boolean(s.mp3);
+  if (!hasYt && hasMp3 && !src.mp3) {
+    setSources({ yt: false, mp3: true, synth: false }, false);
+  } else if (!hasYt && !hasMp3 && mode !== "synth") {
+    setSources({ yt: false, mp3: false, synth: true }, false);
+  }
   updateMediaUI();
 
   if (s.mp3) {
@@ -1056,9 +1062,12 @@ function renderList() {
 }
 
 function route() {
-  if (!ytLoaded || !api) return;
+  if (!api) return;
   const p = new URLSearchParams(location.search);
   const hashId = decodeURIComponent(location.hash.slice(1));
+  const targetSong = hashId ? songs.find(x => x.id === hashId) : null;
+  const needsYt = Boolean(p.get("yt") || (targetSong && targetSong.yt));
+  if (needsYt && !ytLoaded) return;
 
   if (p.get("src")) { const ks = p.get("src").split(","); setSources({ yt: ks.includes("yt"), mp3: ks.includes("mp3"), synth: ks.includes("synth") }, false); }
   else if (p.get("mode")) { const m = p.get("mode"); setSources({ yt: m === "video", mp3: m === "audio", synth: m === "synth" }, false); }
@@ -1239,18 +1248,21 @@ $("#bpr").onchange = e => { api.settings.display.barsPerRow = Number(e.target.va
 $("#scrollMode").onchange = e => { api.settings.player.scrollMode = scrollModeOf(e.target.value); api.updateSettings(); };
 $("#goSite").onclick = () => {
   const g = $("#siteGp").value.trim(), u = $("#urlYt").value.trim();
-  if (!g || !u) return msg("請填「網站上的 GP 路徑」並貼上 YouTube 網址");
-  const q = new URLSearchParams({ gp: g, yt: u, offset: $("#offTry").value || 0, title: g.split("/").pop().replace(/\.[^.]+$/, "") });
+  if (!g) return msg("請填「網站上的 GP 路徑」");
+  const params = { gp: g, offset: $("#offTry").value || 0, title: g.split("/").pop().replace(/\.[^.]+$/, "") };
+  if (u) params.yt = u;
+  else params.src = "synth";
+  const q = new URLSearchParams(params);
   location.href = location.pathname + "?" + q.toString();
 };
 $("#goTry").onclick = () => {
-  const f = $("#fileGp").files[0], u = $("#urlYt").value, mp3 = $("#fileMp3").files[0];
+  const f = $("#fileGp").files[0], u = $("#urlYt").value.trim(), mp3 = $("#fileMp3").files[0];
   if (!f) return msg("請先選擇 GP 檔");
-  if (!u && !mp3) return msg("請貼上 YouTube 網址，或選擇一個本地 MP3/WAV 音檔");
   const r = new FileReader();
   r.onload = () => {
     const mp3Url = mp3 ? URL.createObjectURL(mp3) : "";
-    if (!u && mp3) setSources({ yt: false, mp3: true }, false);
+    if (!u && mp3) setSources({ yt: false, mp3: true, synth: false }, false);
+    else if (!u && !mp3) setSources({ yt: false, mp3: false, synth: true }, false);
     loadSong({
       title: f.name.replace(/\.[^.]+$/, ""),
       gp: new Uint8Array(r.result),
