@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>鼓譜練習器</title>
+<style>
+:root{
+  --bg:#f5f4f0;--fg:#1f1f1f;--card:#ffffff;--line:#dedad2;
+  --acc:#d9480f;--acc-hover:#c23d0a;--acc-soft:#fff0e8;
+  --ok:#2b8a3e;--ok-hover:#237032;--muted:#666666;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif;background:var(--bg);color:var(--fg);line-height:1.45}
+
+#app{display:grid;grid-template-columns:256px 1fr;min-height:100vh}
+body.student-mode #app{grid-template-columns:1fr}
+body.student-mode aside{display:none}
+body.student-mode .teacher-only{display:none !important}
+
+aside{background:var(--card);border-right:1px solid var(--line);padding:14px;overflow:auto;max-height:100vh;position:sticky;top:0}
+aside h1{font-size:17px;margin:0 0 10px;display:flex;align-items:center;justify-content:space-between;gap:6px}
+.badge{font-size:11px;padding:2px 7px;border-radius:999px;background:var(--acc-soft);color:var(--acc);font-weight:700}
+
+input,select,button{font:inherit;padding:6px 9px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--fg)}
+button{cursor:pointer;transition:background .15s ease,border-color .15s ease,transform .06s ease}
+button:hover:not(:disabled){background:#f2f0ec}
+button:active:not(:disabled){transform:translateY(1px)}
+button.primary{background:var(--acc);color:#fff;border-color:var(--acc)}
+button.primary:hover:not(:disabled){background:var(--acc-hover)}
+button.success{background:var(--ok);color:#fff;border-color:var(--ok)}
+button.success:hover:not(:disabled){background:var(--ok-hover)}
+button.active-tool{background:var(--acc-soft);border-color:var(--acc);color:var(--acc);font-weight:600}
+button:disabled{opacity:.48;cursor:not-allowed}
+
+#search{width:100%;margin-bottom:8px}
+#list{list-style:none;margin:0;padding:0}
+#list li{padding:8px 10px;border-radius:7px;cursor:pointer;font-size:14px;margin-bottom:2px}
+#list li:hover{background:#f2f0ec}
+#list li.on{background:var(--acc-soft);font-weight:600;color:var(--acc)}
+
+details.side-box{margin-top:14px;font-size:13.5px;border-top:1px solid var(--line);padding-top:10px}
+details.side-box summary{cursor:pointer;font-weight:600}
+details.side-box label{display:block;margin:8px 0 3px;font-size:12.5px;color:#555}
+details.side-box input{width:100%}
+
+main{padding:12px 14px;min-width:0;display:flex;flex-direction:column}
+#top{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start}
+#vwrap{width:min(400px,100%);aspect-ratio:16/9;background:#111;border-radius:10px;overflow:hidden;position:relative;display:flex;align-items:center;justify-content:center;flex:none}
+#vwrap iframe{pointer-events:none;width:100%;height:100%}
+
+#countInOverlay{
+  display:none;position:absolute;inset:0;background:rgba(15,15,15,.72);
+  color:#fff;align-items:center;justify-content:center;flex-direction:column;
+  z-index:10;backdrop-filter:blur(2px);text-align:center
+}
+#countInOverlay.show{display:flex}
+#countInNum{font-size:48px;font-weight:800;line-height:1.1;color:#ff922b}
+#countInSub{font-size:13px;color:#eee;margin-top:4px}
+
+#audioBox{display:none;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;padding:16px;color:#eee;text-align:center;gap:10px}
+#audioBox.show{display:flex}
+#audioProgress{width:100%;accent-color:var(--acc);cursor:pointer}
+#audioTime{font-size:13px;font-variant-numeric:tabular-nums;color:#bbb}
+
+#ctl{display:flex;flex-direction:column;gap:8px;flex:1;min-width:260px}
+#titleRow{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+#title{font-size:19px;font-weight:700}
+
+/* 核心控制列：播放時只保留 播放/暫停、停止、速度、節拍器 */
+#coreBar{
+  display:flex;gap:8px;flex-wrap:wrap;align-items:center;
+  background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px
+}
+.core-item{display:inline-flex;align-items:center;gap:5px;font-size:14px}
+
+/* 進階設定區（預設收合） */
+#advPanel{
+  background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px
+}
+#advPanel summary{
+  cursor:pointer;font-size:13.5px;font-weight:600;color:#333;
+  display:flex;align-items:center;justify-content:space-between;list-style:none
+}
+#advPanel summary::-webkit-details-marker{display:none}
+.adv-body{margin-top:10px;display:flex;flex-direction:column;gap:8px;border-top:1px solid #ece9e2;padding-top:10px}
+.adv-row{display:flex;gap:8px 12px;flex-wrap:wrap;align-items:center;font-size:13.5px}
+.adv-row label{display:inline-flex;align-items:center;gap:4px}
+
+/* 播放中自動隱藏非核心控制與進階面板，最大化譜面與影片空間 */
+body.is-playing #advPanel,
+body.is-playing #titleRow .secondary-actions,
+body.is-playing .non-core-ctl{display:none !important}
+body.is-playing #coreBar{border-color:var(--acc);box-shadow:0 2px 10px rgba(217,72,15,.12)}
+
+#statusStrip{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;min-height:20px}
+#loopBadge{font-size:12px;padding:2px 8px;border-radius:999px;background:#e7f5ff;color:#1864ab;font-weight:600;display:none}
+#loopBadge.show{display:inline-block}
+#msg{color:#b00;font-size:13.5px;font-weight:500}
+#hint{color:var(--muted);font-size:12.5px}
+
+.nudge-group{display:inline-flex;align-items:center;gap:3px}
+.nudge-group button{padding:5px 7px;font-size:12.5px}
+
+#scoreWrap{
+  margin-top:10px;background:#fff;border:1px solid var(--line);border-radius:10px;
+  height:68vh;overflow:auto;padding:8px;position:relative;-webkit-overflow-scrolling:touch
+}
+#score.touch-selecting{touch-action:none}
+.at-cursor-bar{background:rgba(217,72,15,.15)}
+.at-selection div{background:rgba(64,64,255,.12)}
+.at-cursor-beat{background:rgba(217,72,15,.85);width:3px}
+.at-highlight *{fill:#d9480f !important;stroke:#d9480f !important}
+
+/* 強制 SVG 內所有第二聲部休止符呈現純黑 */
+#score svg [style*="rgba"],
+#score svg [fill*="rgba"],
+#score svg [fill-opacity]{
+  fill:#111111 !important;fill-opacity:1 !important;opacity:1 !important
+}
+#score svg [stroke*="rgba"],
+#score svg [stroke-opacity]{
+  stroke:#111111 !important;stroke-opacity:1 !important
+}
+
+dialog{border:none;border-radius:12px;padding:20px;max-width:380px;width:90%;box-shadow:0 10px 30px rgba(0,0,0,.25);text-align:center}
+dialog::backdrop{background:rgba(0,0,0,.5)}
+#qrCanvas{margin:12px auto;display:block;border:8px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.1);border-radius:6px}
+#shareUrlBox{width:100%;font-size:12px;background:#f4f4f2;color:#333;margin-bottom:10px}
+
+#splitter{flex:none;position:relative;background:#d8d1c5;border:1px solid #bab2a4;border-radius:10px;height:20px;margin:6px 0 2px;cursor:row-resize;touch-action:none;user-select:none;-webkit-user-select:none}
+#splitter::after{content:"";position:absolute;left:50%;top:50%;width:52px;height:4px;margin:-2px 0 0 -26px;border-radius:3px;background:#6f685b}
+#splitter:hover,#splitter.on{background:#c5bdb0}
+body.dragging{user-select:none;-webkit-user-select:none}
+
+@media (max-width:800px), (max-height:500px){
+  #app{display:block}
+  aside{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line)}
+  main{height:100vh;height:100dvh;padding:6px 8px;overflow:hidden}
+  #top{display:flex;flex-direction:column;flex-wrap:nowrap;gap:6px;flex:none}
+  #vwrap{width:min(100%,42vh);width:min(100%,42dvh);margin:0 auto;border-radius:8px;flex:none}
+  #ctl{min-width:0;gap:6px;flex:none}
+  #title{font-size:15px}
+  #coreBar{padding:6px 8px;gap:6px}
+  .core-item{font-size:13px}
+  #coreBar select,#coreBar button{padding:5px 7px}
+  #advPanel{padding:6px 10px}
+  .adv-body{max-height:28vh;overflow-y:auto}
+  #scoreWrap{flex:1;min-height:0;height:auto;margin-top:0;padding:4px}
+  #splitter{margin:4px 0}
+}
+@media (orientation:landscape) and (max-height:500px){
+  main{flex-direction:row;gap:8px}
+  #top{width:36%;flex:none;overflow-y:auto;overflow-x:hidden}
+  #vwrap{width:100%;flex:none}
+  #title{font-size:13px}
+  #scoreWrap{margin-top:0}
+  #splitter{width:20px;height:auto;margin:0;cursor:col-resize;align-self:stretch}
+  #splitter::after{width:4px;height:52px;margin:-26px 0 0 -2px}
+}
+</style>
+</head>
+<body>
+<div id="app">
+<aside>
+  <h1><span>🥁 鼓譜練習器</span><span class="badge">老師端</span></h1>
+  <input id="search" placeholder="搜尋歌曲…">
+  <ul id="list"></ul>
+  <details class="side-box">
+    <summary>快速試用 / 做學生連結</summary>
+    <p style="font-size:12px;color:#b45309;margin:6px 0">① 用電腦裡的 GP 檔載入，只能自己測試，<b>不能</b>做學生 QR。</p>
+    <label>選擇 GP 檔 *</label><input type="file" id="fileGp" accept=".gp,.gp3,.gp4,.gp5,.gpx,.musicxml,.xml">
+    <label>YouTube 網址（選填）</label><input id="urlYt" placeholder="https://youtu.be/...">
+    <label>或 本地 MP3/WAV 音檔（選填）</label><input type="file" id="fileMp3" accept="audio/*">
+    <label>起始位置（秒）</label><input id="offTry" type="number" step="0.01" value="0">
+    <p><button class="primary" id="goTry" style="width:100%">載入測試（電腦檔案）</button></p>
+    <hr>
+    <p style="font-size:12px;color:#166534;margin:6px 0">② 要給學生用：先把 GP 檔上傳到網站的 songs 資料夾，再填路徑，用上面的 YouTube 網址與起始位置載入，載入後按「學生連結 / QR Code」。</p>
+    <label>網站上的 GP 路徑</label><input id="siteGp" placeholder="songs/HandClap.gp">
+    <p><button class="success" id="goSite" style="width:100%">載入網站上的 GP（可做學生連結）</button></p>
+  </details>
+</aside>
+
+<main>
+  <div id="top">
+    <div id="vwrap">
+      <div id="yt"></div>
+      <div id="countInOverlay">
+        <div id="countInNum">4</div>
+        <div id="countInSub">預備拍進行中…</div>
+      </div>
+      <div id="audioBox">
+        <div style="font-size:28px">🎧</div>
+        <div id="audioLabel" style="font-size:14px;font-weight:600">MP3 / WAV 音檔播放模式</div>
+        <input type="range" id="audioProgress" min="0" max="100" step="0.1" value="0">
+        <div id="audioTime">00:00 / 00:00</div>
+        <label class="teacher-only" style="font-size:12px;background:#333;padding:4px 10px;border-radius:6px;cursor:pointer;margin-top:4px">
+          更換本機音檔 <input type="file" id="inlineMp3" accept="audio/*" hidden>
+        </label>
+      </div>
+    </div>
+
+    <div id="ctl">
+      <div id="titleRow">
+        <div id="title">請從左邊選一首歌</div>
+        <div class="teacher-only secondary-actions" style="display:flex;gap:6px;flex-wrap:wrap">
+          <button id="previewStudent" title="預覽學生掃碼後看到的防呆畫面">👁️ 預覽學生視角</button>
+          <button class="success" id="openShare">📲 學生連結 / QR Code</button>
+        </div>
+      </div>
+
+      <!-- 核心控制列：播放中只顯示 播放/暫停、停止、速度、節拍器 -->
+      <div id="coreBar">
+        <button class="primary" id="play" disabled>▶ 播放</button>
+        <button id="stop" disabled>■ 停止</button>
+        <label class="core-item">速度
+          <select id="speed">
+            <option>0.5</option><option>0.6</option><option>0.75</option><option>0.85</option>
+            <option selected>1</option><option>1.15</option><option>1.25</option>
+          </select>
+        </label>
+        <label class="core-item"><input type="checkbox" id="met"> 節拍器</label>
+        <select id="metStep" class="non-core-ctl"><option value="960">4分音符</option><option value="480">8分音符</option></select>
+        <label class="core-item non-core-ctl"><input type="checkbox" id="loop"> 循環選取區</label>
+      </div>
+
+      <!-- 細節功能預設收合 -->
+      <details id="advPanel">
+        <summary>
+          <span>⚙ 進階與練習工具（預備拍・循環框選・音量・對齊・版面）</span>
+          <span style="font-size:12px;color:#777">點擊展開 / 收合</span>
+        </summary>
+        <div class="adv-body">
+          <div class="adv-row">
+            <label><input type="checkbox" id="countIn"> 預備拍（1小節）</label>
+            <button type="button" id="touchSelectToggle" title="手機觸控時開啟框選模式，避免滑動頁面">📱 觸控框選：關</button>
+            <button type="button" id="setLoopA" title="以目前游標所在小節作為循環起點">設起點 A</button>
+            <button type="button" id="setLoopB" title="以目前游標所在小節作為循環終點並啟用循環">設終點 B</button>
+            <button type="button" id="clearSel">清除選取</button>
+          </div>
+
+          <div class="adv-row">
+            <span style="color:#555">發聲：</span>
+            <label><input type="checkbox" id="srcYt" checked> 影片</label>
+            <label><input type="checkbox" id="srcMp3"> MP3</label>
+            <label><input type="checkbox" id="srcSynth"> 譜面鼓聲</label>
+            <label>鼓組
+              <select id="kit"><option value="0">標準</option><option value="8">Room</option><option value="16" selected>Power</option></select>
+            </label>
+          </div>
+
+          <div class="adv-row">
+            <label>BPM <input type="number" id="bpm" min="20" max="400" step="1" style="width:66px"></label>
+            <span id="baseBpmLbl" style="font-size:12px;color:#666"></span>
+            <label>鼓聲 <input type="range" id="vol" min="0" max="300" step="5" value="150" style="width:76px"> <span id="volLbl">150%</span></label>
+            <label>影音 <input type="range" id="volM" min="0" max="100" step="5" value="100" style="width:76px"> <span id="volMLbl">100%</span></label>
+            <label>節拍器音量 <input type="range" id="metVol" min="0.1" max="1" step="0.05" value="0.6" style="width:76px"></label>
+          </div>
+
+          <div class="adv-row">
+            <span class="teacher-only nudge-group" title="調整影片/音檔第一拍起始秒數">
+              <label>起始(秒) <input id="offset" type="number" step="0.01" value="0" style="width:74px"></label>
+              <button type="button" onclick="nudgeOffset(-0.05)">-0.05</button>
+              <button type="button" onclick="nudgeOffset(0.05)">+0.05</button>
+              <button type="button" id="tapSync" title="播放中聽到第一拍時按下，自動抓取目前秒數為 Offset">🎯 抓第一拍</button>
+            </span>
+            <label>縮放
+              <select id="zoom"><option value="0.55">55%</option><option value="0.7">70%</option><option value="0.85">85%</option><option value="1" selected>100%</option><option value="1.2">120%</option><option value="1.5">150%</option></select>
+            </label>
+            <label>每行小節
+              <select id="bpr"><option value="-1" selected>自動</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="6">6</option></select>
+            </label>
+            <label>捲動
+              <select id="scrollMode">
+                <option value="ahead" selected>提早一行就捲動</option>
+                <option value="continuous">每換行就捲</option>
+                <option value="smooth">平滑持續</option>
+                <option value="off">不自動捲</option>
+              </select>
+            </label>
+            <label>版面
+              <select id="layout"><option value="page">自動換行</option><option value="horizontal">橫向捲動</option></select>
+            </label>
+            <label id="trackWrap" hidden>聲部 <select id="track"></select></label>
+          </div>
+
+          <div id="hint">
+            <span style="float:right;color:#999;font-size:11px">介面 v7</span>
+            點擊樂譜可跳轉；電腦拖曳或開啟「觸控框選」後手指拖曳可選取循環小節；播放時僅保留核心四鍵以放大譜面。
+          </div>
+        </div>
+      </details>
+
+      <select id="mode" hidden>
+        <option value="video">YouTube 影片</option>
+        <option value="audio">MP3 / WAV 音檔</option>
+        <option value="synth">譜面鼓聲（無原曲）</option>
+      </select>
+
+      <div id="statusStrip">
+        <span id="loopBadge">循環區間：未設定</span>
+        <div id="msg"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="splitter" role="separator" aria-label="拖曳調整影片與譜面比例" title="拖曳調整大小；雙擊還原"></div>
+  <div id="scoreWrap"><div id="score"></div></div>
+</main>
+</div>
+
+<dialog id="shareModal">
+  <h3 style="margin:0 0 6px">📲 學生專用練習連結</h3>
+  <p style="font-size:13px;color:#555;margin:0 0 8px">此連結已<b>鎖定起始對齊 (Offset)</b> 並隱藏歌單與設定，學生掃碼即可直接練習：</p>
+  <input id="shareUrlBox" readonly onclick="this.select()">
+  <canvas id="qrCanvas" width="220" height="220"></canvas>
+  <div style="display:flex;gap:8px;justify-content:center;margin-top:12px">
+    <button class="primary" id="copyStudentUrl">複製連結</button>
+    <button class="success" id="downloadQr">下載 QR PNG</button>
+    <button onclick="$('#shareModal').close()">關閉</button>
+  </div>
+</dialog>
+
+<audio id="htmlAudio" preload="auto"></audio>
+<script src="alphaTab.min.js?v=2"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+const $ = s => document.querySelector(s);
+const FONT = "https://cdn.jsdelivr.net/npm/@coderline/alphatab@1.9.0/dist/font/";
+const SF = "drums.sf2?v=1";
+
+let songs = [], yt, api, timer, offset = 0, pending = null, curVideo = null, ytLoaded = false;
+let mode = "video", lastGp = null, ac = null, currentSongObj = null;
+let countInTimer = null, isCountingIn = false;
+let loopStartBar = null, loopEndBar = null, touchSelectMode = false;
+
+const src = { yt: true, mp3: false, synth: false };
+const met = { last: -1 };
+const audioEl = $("#htmlAudio");
+
+const urlParams = new URLSearchParams(location.search);
+let isStudent = urlParams.get("student") === "1";
+if (isStudent) document.body.classList.add("student-mode");
+
+const copyGp = () => typeof lastGp === "string" ? lastGp : lastGp.slice();
+const ytId = v => { const m = String(v || "").match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([\w-]{11})/); return m ? m[1] : String(v || "").trim(); };
+const msg = t => $("#msg").textContent = t || "";
+const fmtTime = s => {
+  if (!isFinite(s) || s < 0) return "00:00";
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+};
+
+const getMediaTime = () => mode === "audio" ? audioEl.currentTime : (yt && yt.getCurrentTime ? yt.getCurrentTime() : 0);
+const getMediaDur = () => mode === "audio" ? (audioEl.duration || 0) : (yt && yt.getDuration ? yt.getDuration() : 0);
+const pos = () => Math.max(0, (getMediaTime() - offset) * 1000);
+
+function ensureAudioContext() {
+  if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+  if (ac.state === "suspended") ac.resume().catch(() => {});
+  return ac;
+}
+
+// ---- 預備拍（1 小節） ----
+function cancelCountIn() {
+  if (countInTimer) { clearInterval(countInTimer); countInTimer = null; }
+  isCountingIn = false;
+  $("#countInOverlay").classList.remove("show");
+  msg("");
+}
+
+function startWithCountIn() {
+  if (!$("#countIn").checked || !api || !api.score || !api.score.masterBars.length) {
+    api.playPause();
+    return;
+  }
+  cancelCountIn();
+  const ctx = ensureAudioContext();
+  const curMs = Math.max(0, api.timePosition || pos());
+  const curTick = api.tickPosition || 0;
+  const mb = api.score.masterBars.find(b => curTick >= b.start && curTick < b.start + b.calculateDuration()) || api.score.masterBars[0];
+  const beatsPerBar = Math.max(1, mb.timeSignatureNumerator || 4);
+  const denom = mb.timeSignatureDenominator || 4;
+  const beatMs = (60000 / Math.max(20, (baseBpm || 120) * (curRate || 1))) * (4 / denom);
+
+  try { api.pause(); } catch (_) {}
+  stopTimer();
+  try { if (mode === "audio") audioEl.pause(); else if (yt && yt.pauseVideo) yt.pauseVideo(); } catch (_) {}
+  slavesPause();
+
+  isCountingIn = true;
+  let stepIdx = 0;
+  const overlay = $("#countInOverlay");
+  const numEl = $("#countInNum");
+  const subEl = $("#countInSub");
+  overlay.classList.add("show");
+
+  const runBeat = () => {
+    if (!isCountingIn) return;
+    const remaining = beatsPerBar - stepIdx;
+    numEl.textContent = String(remaining);
+    subEl.textContent = `預備拍（第 ${stepIdx + 1} / ${beatsPerBar} 拍）`;
+    click(ctx.currentTime + 0.01, stepIdx === 0);
+    stepIdx++;
+    if (stepIdx >= beatsPerBar) {
+      clearInterval(countInTimer);
+      countInTimer = null;
+      setTimeout(() => {
+        if (!isCountingIn) return;
+        isCountingIn = false;
+        overlay.classList.remove("show");
+        if (mode === "audio" && curMs === 0) audioEl.currentTime = offset;
+        else if (mode === "video" && curMs === 0 && yt && yt.seekTo) yt.seekTo(offset, true);
+        api.play();
+      }, Math.max(40, beatMs * 0.85));
+    }
+  };
+
+  runBeat();
+  countInTimer = setInterval(runBeat, beatMs);
+}
+
+// ---- 多來源同步 ----
+const slaves = () => { const l = []; if (mode !== "video" && src.yt) l.push("yt"); if (mode !== "audio" && src.mp3) l.push("audio"); return l; };
+const sTime = n => n === "yt" ? ((yt && yt.getCurrentTime) ? yt.getCurrentTime() : 0) : audioEl.currentTime;
+const sSeek = (n, t) => { t = Math.max(0, t); try { n === "yt" ? yt.seekTo(t, true) : (audioEl.currentTime = t); } catch (e) {} };
+const sPlay = n => { try { n === "yt" ? yt.playVideo() : audioEl.play().catch(() => {}); } catch (e) {} };
+const sPause = n => { try { n === "yt" ? yt.pauseVideo() : audioEl.pause(); } catch (e) {} };
+const sRate = (n, r) => { try { n === "yt" ? yt.setPlaybackRate(r) : (audioEl.playbackRate = r); } catch (e) {} };
+function slavesStart(t) { slaves().forEach(n => { sSeek(n, t); sRate(n, curRate); sPlay(n); }); }
+function slavesPause() { slaves().forEach(sPause); }
+let lastDrift = 0;
+function slavesDrift(t) {
+  const now = performance.now(); if (now - lastDrift < 600) return; lastDrift = now;
+  slaves().forEach(n => { if (Math.abs(sTime(n) - t) > 0.2) sSeek(n, t); });
+}
+
+const handler = {
+  get backingTrackDuration() { return Math.max(0, (getMediaDur() - offset) * 1000); },
+  get playbackRate() { return mode === "audio" ? audioEl.playbackRate : yt.getPlaybackRate(); },
+  set playbackRate(v) {
+    if (mode === "audio") audioEl.playbackRate = v;
+    else if (yt && yt.setPlaybackRate) yt.setPlaybackRate(v);
+    slaves().forEach(n => sRate(n, v));
+  },
+  get masterVolume() { return mode === "audio" ? audioEl.volume : yt.getVolume() / 100; },
+  set masterVolume(v) {
+    if (mode === "audio") audioEl.volume = v;
+    else if (yt && yt.setVolume) yt.setVolume(v * 100);
+  },
+  seekTo(ms) {
+    const target = Math.max(0, ms / 1000 + offset);
+    if (mode === "audio") audioEl.currentTime = target;
+    else if (yt && yt.seekTo) yt.seekTo(target, true);
+    slaves().forEach(n => sSeek(n, target));
+  },
+  play() {
+    if (getMediaTime() < offset) {
+      if (mode === "audio") audioEl.currentTime = offset;
+      else yt.seekTo(offset, true);
+    }
+    if (mode === "audio") audioEl.play().catch(() => msg("音檔播放失敗，請先載入音檔"));
+    else yt.playVideo();
+    startTimer();
+    slavesStart(getMediaTime());
+  },
+  pause() {
+    if (mode === "audio") audioEl.pause();
+    else if (yt && yt.pauseVideo) yt.pauseVideo();
+    slavesPause();
+    stopTimer();
+  }
+};
+
+const startTimer = () => {
+  stopTimer();
+  timer = setInterval(() => {
+    if (api && api.player && api.player.output) api.player.output.updatePosition(pos());
+    if (slaves().length) slavesDrift(getMediaTime());
+    if (mode === "audio" && audioEl.duration) {
+      $("#audioProgress").value = (audioEl.currentTime / audioEl.duration) * 100;
+      $("#audioTime").textContent = `${fmtTime(audioEl.currentTime)} / ${fmtTime(audioEl.duration)}`;
+    }
+  }, 30);
+};
+const stopTimer = () => { clearInterval(timer); timer = null; };
+
+audioEl.onended = () => { if (mode === "audio") { stopTimer(); api.stop(); } };
+$("#audioProgress").oninput = e => {
+  if (!audioEl.duration) return;
+  const sec = (Number(e.target.value) / 100) * audioEl.duration;
+  audioEl.currentTime = sec;
+  api.player.output.updatePosition(pos());
+};
+
+function patchScoreSvg(root) {
+  return;
+}
+
+let baseBpm = 120, curRate = 1, curVol = 1.5, curMVol = 1, curKit = 16;
+const setKit = score => score.tracks.forEach(t => { if (t.staves.some(s => s.isPercussion)) t.playbackInfo.program = curKit; });
+
+function updateScrollOffsets() {
+  if (!api) return;
+  const horiz = $("#layout").value === "horizontal";
+  api.settings.player.scrollOffsetX = horiz ? -Math.round($("#scoreWrap").clientWidth / 2) : 0;
+  api.settings.player.scrollOffsetY = 0;
+  try { api.updateSettings(); } catch (e) {}
+}
+function scrollModeOf(v) {
+  const horiz = $("#layout").value === "horizontal";
+  if (v === "ahead") return horiz ? alphaTab.ScrollMode.Smooth : alphaTab.ScrollMode.Off;
+  return { off: alphaTab.ScrollMode.Off, continuous: alphaTab.ScrollMode.Continuous, smooth: alphaTab.ScrollMode.Smooth }[v] ?? alphaTab.ScrollMode.Continuous;
+}
+
+// 換行提前一行（b - 2）
+let lastAhead = { target: -1, t: 0 };
+function aheadScroll(beat) {
+  if ($("#scrollMode").value !== "ahead" || $("#layout").value === "horizontal") return;
+  const bl = api.boundsLookup; if (!bl || !bl.isFinished || !bl.staffSystems.length) return;
+  const bb = bl.findBeat(beat); if (!bb) return;
+  const systems = bl.staffSystems;
+  const cy = bb.visualBounds.y + bb.visualBounds.h / 2;
+  const idx = systems.findIndex(s => cy >= s.visualBounds.y && cy < s.visualBounds.y + s.visualBounds.h);
+  if (idx < 0) return;
+  const wrap = $("#scoreWrap"), off = $("#score").offsetTop, st = wrap.scrollTop, ch = wrap.clientHeight;
+  let a = -1, b = -1;
+  systems.forEach((s, i) => {
+    const top = off + s.visualBounds.y, bot = top + s.visualBounds.h;
+    if (top >= st - 4 && bot <= st + ch + 4) { if (a < 0) a = i; b = i; }
+  });
+  const trigger = a < 0 ? -1 : Math.max(a, b - 2);
+  const lb = systems[idx].bars && systems[idx].bars.length ? systems[idx].bars[systems[idx].bars.length - 1] : null;
+  const atEnd = lb ? (bb.visualBounds.x >= lb.visualBounds.x + lb.visualBounds.w * 0.35) : true;
+  if (!(a < 0 || idx < a || idx > trigger || (idx === trigger && atEnd))) return;
+  const target = Math.max(0, off + systems[idx].visualBounds.y - 6);
+  if (Math.abs(target - st) < 6) return;
+  const now = performance.now();
+  if (Math.abs(target - lastAhead.target) < 2 && now - lastAhead.t < 800) return;
+  lastAhead = { target, t: now };
+  wrap.scrollTo({ top: target, behavior: "smooth" });
+}
+
+function snapRate(r) {
+  r = Math.min(Math.max(r, 0.25), 2);
+  if (src.yt && yt && yt.getAvailablePlaybackRates) {
+    try {
+      const a = yt.getAvailablePlaybackRates();
+      if (a && a.length) return a.reduce((p, c) => Math.abs(c - r) < Math.abs(p - r) ? c : p);
+    } catch (e) {}
+  }
+  return r;
+}
+function setSpeed(r, quiet) {
+  const snapped = snapRate(r);
+  curRate = snapped;
+  try { api.playbackSpeed = snapped; } catch (e) {}
+  slaves().forEach(n => sRate(n, snapped));
+  $("#bpm").value = Math.round(baseBpm * snapped);
+  const sel = $("#speed");
+  let opt = [...sel.options].find(o => !o.dataset.custom && Math.abs(Number(o.value) - snapped) < 0.001);
+  if (!opt) {
+    opt = sel.querySelector("option[data-custom]") || new Option("", "");
+    opt.dataset.custom = "1"; opt.value = String(snapped); opt.textContent = Math.round(snapped * 100) + "%";
+    if (!opt.parentNode) sel.add(opt);
+  }
+  sel.value = opt.value;
+  if (!quiet && Math.abs(r - snapped) > 0.01)
+    msg("影片模式只能使用 YouTube 提供的速度，已調整為 " + Math.round(baseBpm * snapped) + " BPM（" + Math.round(snapped * 100) + "%）");
+}
+function applyVol() {
+  $("#volLbl").textContent = Math.round(curVol * 100) + "%";
+  $("#volMLbl").textContent = Math.round(curMVol * 100) + "%";
+  try { if (yt && yt.setVolume) yt.setVolume(Math.round(curMVol * 100)); } catch (e) {}
+  try { audioEl.volume = Math.min(1, curMVol); } catch (e) {}
+  try {
+    if (mode === "synth") {
+      const ts = (api.tracks && api.tracks.length) ? api.tracks : (api.score ? [api.score.tracks[0]] : []);
+      if (ts.length) api.changeTrackVolume(ts, curVol);
+    }
+  } catch (e) {}
+}
+
+// ---- 循環範圍選取（支援電腦滑鼠、手機觸控框選與 A/B 小節指定） ----
+function updateLoopBadge() {
+  const badge = $("#loopBadge");
+  if (loopStartBar != null && loopEndBar != null) {
+    const a = Math.min(loopStartBar, loopEndBar) + 1;
+    const b = Math.max(loopStartBar, loopEndBar) + 1;
+    badge.textContent = `循環區間：第 ${a} ～ ${b} 小節${$("#loop").checked ? "（循環中）" : ""}`;
+    badge.classList.add("show");
+  } else if (loopStartBar != null) {
+    badge.textContent = `循環起點：第 ${loopStartBar + 1} 小節（請選終點）`;
+    badge.classList.add("show");
+  } else {
+    badge.textContent = "循環區間：未設定";
+    badge.classList.remove("show");
+  }
+}
+
+function applyBarRange(barA, barB, enableLoop = true) {
+  if (!api || !api.score || !api.score.masterBars.length) return;
+  const maxIdx = api.score.masterBars.length - 1;
+  const startIdx = Math.max(0, Math.min(maxIdx, Math.min(barA, barB)));
+  const endIdx = Math.max(0, Math.min(maxIdx, Math.max(barA, barB)));
+  loopStartBar = startIdx;
+  loopEndBar = endIdx;
+
+  const startMb = api.score.masterBars[startIdx];
+  const endMb = api.score.masterBars[endIdx];
+  const range = {
+    startTick: startMb.start,
+    endTick: endMb.start + endMb.calculateDuration()
+  };
+  try {
+    api.playbackRange = range;
+    if (api.highlightPlaybackRange) api.highlightPlaybackRange(startMb.start, range.endTick);
+  } catch (_) {}
+
+  if (enableLoop) {
+    $("#loop").checked = true;
+    try { api.isLooping = true; } catch (_) {}
+  }
+  updateLoopBadge();
+}
+
+function clearLoopRange() {
+  loopStartBar = null;
+  loopEndBar = null;
+  try {
+    api.playbackRange = null;
+    if (api.highlightPlaybackRange) api.highlightPlaybackRange(null, null);
+  } catch (_) {}
+  updateLoopBadge();
+}
+
+function findBarIndexAtScorePoint(clientX, clientY) {
+  if (!api || !api.boundsLookup || !api.boundsLookup.isFinished) return null;
+  const rect = $("#score").getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  for (const sys of api.boundsLookup.staffSystems) {
+    if (!sys.bars) continue;
+    for (const barBounds of sys.bars) {
+      const vb = barBounds.visualBounds;
+      if (x >= vb.x - 6 && x <= vb.x + vb.w + 6 && y >= vb.y - 12 && y <= vb.y + vb.h + 12) {
+        return barBounds.masterBar ? barBounds.masterBar.index : (barBounds.index ?? null);
+      }
+    }
+  }
+  return null;
+}
+
+function setupTouchRangeSelection() {
+  const scoreEl = $("#score");
+  let dragging = false, startBar = null, activePointerId = null;
+
+  const toggleBtn = $("#touchSelectToggle");
+  toggleBtn.onclick = () => {
+    touchSelectMode = !touchSelectMode;
+    toggleBtn.textContent = `📱 觸控框選：${touchSelectMode ? "開" : "關"}`;
+    toggleBtn.classList.toggle("active-tool", touchSelectMode);
+    scoreEl.classList.toggle("touch-selecting", touchSelectMode);
+    msg(touchSelectMode ? "觸控框選已開啟：請在譜面上拖曳選取循環小節" : "觸控框選已關閉，恢復正常滑動");
+  };
+
+  scoreEl.addEventListener("pointerdown", e => {
+    if (!touchSelectMode || e.pointerType === "mouse") return;
+    const barIdx = findBarIndexAtScorePoint(e.clientX, e.clientY);
+    if (barIdx == null) return;
+    dragging = true;
+    startBar = barIdx;
+    activePointerId = e.pointerId;
+    scoreEl.setPointerCapture(e.pointerId);
+    applyBarRange(startBar, startBar, false);
+    e.preventDefault();
+  });
+
+  scoreEl.addEventListener("pointermove", e => {
+    if (!dragging || e.pointerId !== activePointerId) return;
+    const barIdx = findBarIndexAtScorePoint(e.clientX, e.clientY);
+    if (barIdx != null) applyBarRange(startBar, barIdx, false);
+    e.preventDefault();
+  });
+
+  const finishTouch = e => {
+    if (!dragging || (e && e.pointerId !== activePointerId)) return;
+    dragging = false;
+    activePointerId = null;
+    if (startBar != null) {
+      const endBar = loopEndBar ?? startBar;
+      applyBarRange(startBar, endBar, true);
+      msg(`已選取第 ${Math.min(startBar, endBar) + 1} ～ ${Math.max(startBar, endBar) + 1} 小節循環`);
+    }
+    startBar = null;
+  };
+
+  scoreEl.addEventListener("pointerup", finishTouch);
+  scoreEl.addEventListener("pointercancel", finishTouch);
+}
+
+$("#setLoopA").onclick = () => {
+  if (!api || !api.score) return;
+  const tick = api.tickPosition || 0;
+  const mb = api.score.masterBars.find(b => tick >= b.start && tick < b.start + b.calculateDuration()) || api.score.masterBars[0];
+  if (!mb) return;
+  loopStartBar = mb.index;
+  if (loopEndBar != null && loopEndBar >= loopStartBar) applyBarRange(loopStartBar, loopEndBar, true);
+  else updateLoopBadge();
+};
+$("#setLoopB").onclick = () => {
+  if (!api || !api.score) return;
+  const tick = api.tickPosition || 0;
+  const mb = api.score.masterBars.find(b => tick >= b.start && tick < b.start + b.calculateDuration()) || api.score.masterBars[0];
+  if (!mb) return;
+  const start = loopStartBar ?? mb.index;
+  applyBarRange(start, mb.index, true);
+};
+$("#clearSel").onclick = clearLoopRange;
+
+function createApi() {
+  if (window.__DRUM_PATCH__) { if (!document.title.includes("v2")) document.title += " [休止符修正 v2]"; }
+  if (api) { try { api.destroy(); } catch (e) {} }
+  $("#score").innerHTML = "";
+  const isExternal = mode === "video" || mode === "audio";
+  api = new alphaTab.AlphaTabApi($("#score"), {
+    core: {
+      fontDirectory: FONT,
+      engine: "svg",
+      useWorkers: false
+    },
+    display: {
+      layoutMode: $("#layout").value === "horizontal" ? alphaTab.LayoutMode.Horizontal : alphaTab.LayoutMode.Page,
+      scale: Number($("#zoom").value),
+      barsPerRow: Number($("#bpr").value)
+    },
+    player: {
+      playerMode: isExternal ? alphaTab.PlayerMode.EnabledExternalMedia : alphaTab.PlayerMode.EnabledSynthesizer,
+      ...(isExternal ? {} : { soundFont: SF }),
+      scrollElement: $("#scoreWrap"),
+      scrollMode: scrollModeOf($("#scrollMode").value),
+      scrollOffsetX: $("#layout").value === "horizontal" ? -Math.round($("#scoreWrap").clientWidth / 2) : 0,
+      enableCursor: true, enableUserInteraction: true
+    }
+  });
+  const bind = () => { if (isExternal && api.player && api.player.output) api.player.output.handler = handler; };
+  bind();
+  api.scoreLoaded.on(score => {
+    bind();
+    const sel = $("#track"); sel.innerHTML = "";
+    score.tracks.forEach((t, i) => sel.add(new Option(t.name || ("聲部 " + (i + 1)), i)));
+    const drum = score.tracks.findIndex(t => t.staves.some(s => s.isPercussion));
+    const idx = drum >= 0 ? drum : 0;
+    sel.value = idx; $("#trackWrap").hidden = score.tracks.length < 2;
+    baseBpm = Math.round(score.tempo) || 120;
+    $("#baseBpmLbl").textContent = "原速 " + baseBpm;
+    $("#baseBpmLbl").title = "以第一小節的速度為基準";
+    $("#bpm").value = Math.round(baseBpm * curRate);
+    setKit(score);
+    api.renderTracks([score.tracks[idx]]);
+  });
+  if (!isExternal) {
+    api.playerStateChanged.on(e => {
+      if (e.state === 1) slavesStart(api.timePosition / 1000 + offset);
+      else { slavesPause(); if (e.stopped) slaves().forEach(n => sSeek(n, offset)); }
+    });
+    api.playerPositionChanged.on(e => {
+      const t = e.currentTime / 1000 + offset;
+      if (e.isSeek) slaves().forEach(n => sSeek(n, t));
+      else if (api.playerState === 1) slavesDrift(t);
+    });
+  }
+  api.playedBeatChanged.on(aheadScroll);
+  api.playerReady.on(() => {
+    bind();
+    try { api.isLooping = $("#loop").checked; } catch (e) {}
+    setSpeed(curRate, true); applyVol();
+    $("#play").disabled = false; $("#stop").disabled = false; msg("");
+    patchScoreSvg($("#score"));
+  });
+  api.playerStateChanged.on(e => {
+    const playing = e.state === 1;
+    document.body.classList.toggle("is-playing", playing);
+    $("#play").textContent = playing ? "⏸ 暫停" : "▶ 播放";
+    if (!playing) met.last = -1;
+  });
+  api.playerPositionChanged.on(onPos);
+  api.error.on(e => msg("載入失敗：" + (e.message || e)));
+  if (api.soundFontLoad) api.soundFontLoad.on(p => msg("載入鼓聲音色 " + Math.round(p.loaded / p.total * 100) + "%"));
+}
+
+// ---- 節拍器（4分 / 8分） ----
+function click(when, accent) {
+  const ctx = ensureAudioContext();
+  const o = ctx.createOscillator(), g = ctx.createGain(), v = Number($("#metVol").value);
+  o.frequency.value = accent ? 1600 : 1100;
+  g.gain.setValueAtTime(0.0001, when);
+  g.gain.exponentialRampToValueAtTime(v, when + 0.002);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
+  o.connect(g); g.connect(ctx.destination); o.start(when); o.stop(when + 0.06);
+}
+function nextBoundary(t, step) {
+  const mbs = api.score.masterBars;
+  for (let i = 0; i < mbs.length; i++) {
+    const s = mbs[i].start, end = s + mbs[i].calculateDuration();
+    if (t < end) {
+      if (t <= s) return { tick: s, acc: true };
+      const bt = s + Math.ceil((t - s) / step) * step;
+      if (bt < end) return { tick: bt, acc: false };
+      return i + 1 < mbs.length ? { tick: end, acc: true } : null;
+    }
+  }
+  return null;
+}
+function onPos(e) {
+  if (!$("#met").checked || !ac || !api.score) return;
+  if (e.isSeek) met.last = -1;
+  const step = Number($("#metStep").value);
+  const msTick = 60000 / ((e.modifiedTempo || e.originalTempo || 120) * 960);
+  let from = Math.max(e.currentTick, met.last + 1);
+  for (let n = 0; n < 8; n++) {
+    const b = nextBoundary(from, step); if (!b) break;
+    const dt = (b.tick - e.currentTick) * msTick;
+    if (dt > 150) break;
+    click(ac.currentTime + Math.max(0, dt) / 1000, b.acc);
+    met.last = b.tick; from = b.tick + 1;
+  }
+}
+
+function initYt() {
+  yt = new YT.Player("yt", {
+    width: "100%", height: "100%",
+    playerVars: {
+      controls: 0, disablekb: 1, rel: 0, modestbranding: 1, playsinline: 1,
+      ...(location.protocol.startsWith("http") ? { origin: location.origin } : {})
+    },
+    events: {
+      onReady: () => { ytLoaded = true; route(); },
+      onStateChange: e => {
+        if (e.data === YT.PlayerState.CUED && pending) { const f = pending; pending = null; waitDuration(f, 0); }
+        if (e.data === YT.PlayerState.ENDED && mode === "video") { stopTimer(); api.stop(); document.body.classList.remove("is-playing"); }
+      },
+      onError: e => {
+        if (mode === "video") msg(`YouTube 無法載入 (錯誤 ${e.data})，可改切換「MP3 / WAV 音檔」或「譜面鼓聲」練習`);
+      }
+    }
+  });
+}
+window.onYouTubeIframeAPIReady = () => { createApi(); initYt(); };
+function waitDuration(f, n) { (yt.getDuration() > 0 || n > 30) ? f() : setTimeout(() => waitDuration(f, n + 1), 150); }
+
+function updateMediaUI() {
+  const ytDiv = $("#yt"), audioBox = $("#audioBox");
+  if (src.yt) { ytDiv.style.display = "block"; audioBox.classList.remove("show"); $("#vwrap").style.opacity = 1; }
+  else if (src.mp3) { ytDiv.style.display = "none"; audioBox.classList.add("show"); }
+  else { ytDiv.style.display = "block"; audioBox.classList.remove("show"); $("#vwrap").style.opacity = 0.35; }
+}
+function setSources(o, reload = true) {
+  Object.assign(src, o);
+  if (!src.yt && !src.mp3 && !src.synth) src.synth = true;
+  $("#srcYt").checked = src.yt; $("#srcMp3").checked = src.mp3; $("#srcSynth").checked = src.synth;
+  const m = src.synth ? "synth" : src.mp3 ? "audio" : "video";
+  const changed = m !== mode;
+  cancelCountIn();
+  stopTimer();
+  try { api.stop(); } catch (_) {}
+  try { yt.pauseVideo(); } catch (_) {}
+  try { audioEl.pause(); } catch (_) {}
+  mode = m; $("#mode").value = m;
+  updateMediaUI();
+  if (src.yt && currentSongObj && currentSongObj.yt) {
+    const id = ytId(currentSongObj.yt);
+    if (id && id !== curVideo) { curVideo = id; try { yt.cueVideoById({ videoId: id, startSeconds: offset }); } catch (_) {} }
+  }
+  if (changed) {
+    createApi();
+    if (lastGp && reload) { msg("載入中…"); $("#play").disabled = true; $("#stop").disabled = true; api.load(copyGp()); }
+  } else { applyVol(); setSpeed(curRate, true); }
+}
+
+function loadSong(s) {
+  currentSongObj = s;
+  cancelCountIn();
+  clearLoopRange();
+  msg("載入中…"); stopTimer(); try { api.stop(); } catch (e) {}
+  $("#play").disabled = true; $("#stop").disabled = true;
+  $("#title").textContent = s.title || "";
+  offset = Number(s.offset) || 0; $("#offset").value = offset;
+  lastGp = s.gp;
+
+  if (s.mp3 && !s.yt && !src.mp3) setSources({ yt: false, mp3: true }, false);
+  updateMediaUI();
+
+  if (s.mp3) {
+    audioEl.src = s.mp3;
+    $("#audioLabel").textContent = s.mp3Name || s.title || "音檔已載入";
+  }
+
+  const id = ytId(s.yt), go = () => api.load(copyGp());
+  if (mode === "video" && id) {
+    const same = id === curVideo;
+    if (same) { yt.seekTo(offset, true); yt.pauseVideo(); go(); }
+    else { curVideo = id; pending = go; yt.cueVideoById({ videoId: id, startSeconds: offset }); }
+  } else {
+    if (id && id !== curVideo) { curVideo = id; yt.cueVideoById({ videoId: id, startSeconds: offset }); }
+    go();
+  }
+}
+
+function renderList() {
+  const q = $("#search").value.trim().toLowerCase();
+  $("#list").innerHTML = "";
+  songs.filter(s => (s.title + " " + (s.artist || "") + " " + (s.tags || []).join(" ")).toLowerCase().includes(q))
+    .forEach(s => {
+      const li = document.createElement("li");
+      li.textContent = s.title + (s.artist ? " – " + s.artist : "");
+      li.className = location.hash.slice(1) === s.id ? "on" : "";
+      li.onclick = () => { location.hash = s.id; };
+      $("#list").append(li);
+    });
+}
+
+function route() {
+  if (!ytLoaded || !api) return;
+  const p = new URLSearchParams(location.search);
+  const hashId = decodeURIComponent(location.hash.slice(1));
+
+  if (p.get("src")) { const ks = p.get("src").split(","); setSources({ yt: ks.includes("yt"), mp3: ks.includes("mp3"), synth: ks.includes("synth") }, false); }
+  else if (p.get("mode")) { const m = p.get("mode"); setSources({ yt: m === "video", mp3: m === "audio", synth: m === "synth" }, false); }
+
+  if (p.get("gp") && !hashId) {
+    loadSong({
+      title: p.get("title") || "練習曲目",
+      gp: p.get("gp"),
+      yt: p.get("yt") || "",
+      mp3: p.get("mp3") || "",
+      offset: p.get("offset") || 0
+    });
+  } else if (hashId) {
+    const s = songs.find(x => x.id === hashId);
+    if (s) {
+      const overrideOffset = p.has("offset") ? Number(p.get("offset")) : s.offset;
+      loadSong({ ...s, offset: overrideOffset });
+    }
+  } else if (songs.length > 0 && !currentSongObj) {
+    location.hash = songs[0].id;
+  }
+  renderList();
+}
+window.addEventListener("hashchange", route);
+
+$("#play").onclick = () => {
+  ensureAudioContext();
+  applyVol();
+  if (isCountingIn) {
+    cancelCountIn();
+    return;
+  }
+  const isPlaying = api && api.playerState === 1;
+  if (!isPlaying && $("#countIn").checked) {
+    startWithCountIn();
+  } else {
+    api.playPause();
+  }
+};
+$("#met").onchange = e => { if (e.target.checked) { ensureAudioContext(); met.last = -1; } };
+$("#metStep").onchange = () => { met.last = -1; };
+["#srcYt", "#srcMp3", "#srcSynth"].forEach(id => $(id).onchange = () => setSources({ yt: $("#srcYt").checked, mp3: $("#srcMp3").checked, synth: $("#srcSynth").checked }));
+$("#stop").onclick = () => {
+  cancelCountIn();
+  document.body.classList.remove("is-playing");
+  api.stop(); stopTimer();
+  try { audioEl.pause(); audioEl.currentTime = offset; } catch (e) {}
+  try { yt.pauseVideo(); yt.seekTo(offset, true); } catch (e) {}
+};
+$("#speed").onchange = e => setSpeed(Number(e.target.value));
+$("#bpm").onchange = e => { const b = Number(e.target.value); if (b > 0) setSpeed(b / baseBpm); };
+$("#kit").onchange = e => {
+  curKit = Number(e.target.value);
+  if (api && api.score) { try { api.stop(); } catch (_) {} setKit(api.score); try { api.loadMidiForScore(); } catch (_) {} }
+};
+$("#vol").oninput = e => { curVol = Number(e.target.value) / 100; applyVol(); };
+$("#volM").oninput = e => { curMVol = Number(e.target.value) / 100; applyVol(); };
+$("#loop").onchange = e => { api.isLooping = e.target.checked; updateLoopBadge(); };
+
+function applyOffset(val) {
+  offset = Math.round((Number(val) || 0) * 100) / 100;
+  $("#offset").value = offset;
+  if (mode === "audio") audioEl.currentTime = offset;
+  else if (yt && yt.seekTo) yt.seekTo(offset, true);
+}
+window.nudgeOffset = delta => applyOffset(offset + delta);
+$("#offset").onchange = e => applyOffset(e.target.value);
+
+$("#tapSync").onclick = () => {
+  const nowSec = getMediaTime();
+  if (nowSec > 0) {
+    applyOffset(nowSec);
+    api.stop();
+    document.body.classList.remove("is-playing");
+    msg(`已將第 ${offset} 秒設為起始第一拍，請按播放確認對齊！`);
+  }
+};
+
+$("#zoom").onchange = e => { api.settings.display.scale = Number(e.target.value); api.updateSettings(); api.render(); };
+$("#layout").onchange = e => {
+  api.settings.display.layoutMode = e.target.value === "horizontal" ? alphaTab.LayoutMode.Horizontal : alphaTab.LayoutMode.Page;
+  api.settings.player.scrollMode = scrollModeOf($("#scrollMode").value);
+  updateScrollOffsets();
+  api.updateSettings(); api.render();
+};
+$("#track").onchange = e => { api.renderTracks([api.score.tracks[Number(e.target.value)]]); setTimeout(applyVol, 400); };
+$("#search").oninput = renderList;
+
+$("#previewStudent").onclick = () => {
+  const on = document.body.classList.toggle("student-mode");
+  if (on) {
+    const bar = document.createElement("div");
+    bar.id = "exitPreviewBar";
+    bar.style.cssText = "background:#222;color:#fff;padding:6px 14px;font-size:13px;display:flex;justify-content:space-between;align-items:center";
+    bar.innerHTML = `<span>👀 目前為<b>學生防呆視角預覽</b>（Offset 與側邊欄已隱藏鎖定）</span><button style="padding:3px 10px;font-size:12px" onclick="document.body.classList.remove('student-mode');this.parentElement.remove()">返回老師模式</button>`;
+    document.body.prepend(bar);
+  }
+};
+
+$("#openShare").onclick = () => {
+  const isLocal = !currentSongObj || typeof currentSongObj.gp !== "string" || String(currentSongObj.mp3 || "").startsWith("blob:");
+  if (isLocal) {
+    alert("目前載入的是你電腦裡的檔案，學生手機讀不到，所以不能做學生連結。\n\n請改用：\n1. 先把 GP 檔上傳到網站的 songs 資料夾\n2. 左邊「快速試用」填入「網站上的 GP 路徑」與 YouTube 網址\n3. 按「載入網站上的 GP」後，再按學生連結 / QR Code");
+    return;
+  }
+  const u = new URL(location.href);
+  u.searchParams.set("student", "1");
+  u.searchParams.set("offset", offset);
+  u.searchParams.delete("mode");
+  const ks = ["yt", "mp3", "synth"].filter(k => src[k]).join(",");
+  if (ks !== "yt") u.searchParams.set("src", ks); else u.searchParams.delete("src");
+
+  const finalUrl = u.toString();
+  $("#shareUrlBox").value = finalUrl;
+  QRCode.toCanvas($("#qrCanvas"), finalUrl, { width: 220, margin: 1 }, err => {
+    if (err) console.error(err);
+  });
+  $("#shareModal").showModal();
+};
+$("#copyStudentUrl").onclick = () => {
+  navigator.clipboard.writeText($("#shareUrlBox").value).then(() => msg("已複製學生防呆連結！"));
+};
+$("#downloadQr").onclick = () => {
+  const link = document.createElement("a");
+  link.download = (currentSongObj?.id || "drum-practice") + "-qr.png";
+  link.href = $("#qrCanvas").toDataURL("image/png");
+  link.click();
+};
+
+function handleAudioFile(file) {
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  audioEl.src = url;
+  $("#audioLabel").textContent = "🎵 " + file.name;
+  setSources({ yt: false, mp3: true }, true);
+}
+$("#inlineMp3").onchange = e => handleAudioFile(e.target.files[0]);
+
+if (matchMedia("(max-width:800px), (max-height:500px)").matches) $("#zoom").value = "0.7";
+
+// ---- 拖曳調整影片 / 譜面比例 ----
+const isLandCompact = () => matchMedia("(orientation:landscape) and (max-height:500px)").matches;
+const isCompactView = () => matchMedia("(max-width:800px), (max-height:500px)").matches;
+const splitKey = () => isLandCompact() ? "split_land" : isCompactView() ? "split_port" : "split_desk";
+const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} } };
+function applySplit(v) {
+  $("#top").style.width = ""; $("#vwrap").style.width = "";
+  if (v == null || isNaN(v)) return;
+  if (isLandCompact()) $("#top").style.width = v + "px";
+  else $("#vwrap").style.width = v + "px";
+}
+function splitFromPointer(e) {
+  if (isLandCompact()) {
+    const m = $("main").getBoundingClientRect();
+    return Math.max(140, Math.min(m.width - 180, e.clientX - m.left));
+  }
+  const t = $("#top").getBoundingClientRect();
+  const ctlH = isCompactView() ? $("#ctl").offsetHeight + 6 : 0;
+  const maxW = isCompactView() ? $("main").clientWidth - 16 : 960;
+  return Math.max(90, Math.min(maxW, (e.clientY - t.top - ctlH) * 16 / 9));
+}
+(function () {
+  const sp = $("#splitter"); let dragging = false, last = null, timer = null;
+  const rerender = () => { clearTimeout(timer); timer = setTimeout(() => { try { updateScrollOffsets(); api.render(); } catch (e) {} }, 150); };
+  sp.addEventListener("pointerdown", e => { dragging = true; sp.setPointerCapture(e.pointerId); sp.classList.add("on"); document.body.classList.add("dragging"); e.preventDefault(); });
+  sp.addEventListener("pointermove", e => { if (!dragging) return; last = splitFromPointer(e); applySplit(last); });
+  const end = () => { if (!dragging) return; dragging = false; sp.classList.remove("on"); document.body.classList.remove("dragging"); if (last != null) store.set(splitKey(), Math.round(last)); rerender(); };
+  sp.addEventListener("pointerup", end); sp.addEventListener("pointercancel", end);
+  sp.addEventListener("dblclick", () => { store.set(splitKey(), null); applySplit(null); rerender(); });
+  const reapply = () => { const v = store.get(splitKey()); applySplit(v == null ? null : Number(v)); };
+  window.addEventListener("resize", reapply); window.addEventListener("orientationchange", reapply);
+  reapply();
+})();
+
+setupTouchRangeSelection();
+
+$("#bpr").onchange = e => { api.settings.display.barsPerRow = Number(e.target.value); api.updateSettings(); api.render(); };
+$("#scrollMode").onchange = e => { api.settings.player.scrollMode = scrollModeOf(e.target.value); api.updateSettings(); };
+$("#goSite").onclick = () => {
+  const g = $("#siteGp").value.trim(), u = $("#urlYt").value.trim();
+  if (!g || !u) return msg("請填「網站上的 GP 路徑」並貼上 YouTube 網址");
+  const q = new URLSearchParams({ gp: g, yt: u, offset: $("#offTry").value || 0, title: g.split("/").pop().replace(/\.[^.]+$/, "") });
+  location.href = location.pathname + "?" + q.toString();
+};
+$("#goTry").onclick = () => {
+  const f = $("#fileGp").files[0], u = $("#urlYt").value, mp3 = $("#fileMp3").files[0];
+  if (!f) return msg("請先選擇 GP 檔");
+  if (!u && !mp3) return msg("請貼上 YouTube 網址，或選擇一個本地 MP3/WAV 音檔");
+  const r = new FileReader();
+  r.onload = () => {
+    const mp3Url = mp3 ? URL.createObjectURL(mp3) : "";
+    if (!u && mp3) setSources({ yt: false, mp3: true }, false);
+    loadSong({
+      title: f.name.replace(/\.[^.]+$/, ""),
+      gp: new Uint8Array(r.result),
+      yt: u,
+      mp3: mp3Url,
+      mp3Name: mp3 ? "🎵 " + mp3.name : "",
+      offset: $("#offTry").value
+    });
+  };
+  r.readAsArrayBuffer(f);
+};
+
+fetch("songs.json").then(r => r.json()).then(j => { songs = j; renderList(); route(); })
+  .catch(() => msg("讀不到 songs.json（請用網站或本機伺服器開啟，不能直接雙擊 index.html）"));
+</script>
+</body>
+</html>
