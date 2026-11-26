@@ -108,7 +108,15 @@ body.is-playing #coreBar{border-color:var(--acc);box-shadow:0 2px 10px rgba(217,
 }
 #score.touch-selecting{touch-action:none}
 .at-cursor-bar{background:rgba(217,72,15,.15)}
-.at-selection div{background:rgba(64,64,255,.12)}
+.at-selection div{background:rgba(64,64,255,.16)}
+#score{position:relative}
+#customSelLayer{position:absolute;inset:0;pointer-events:none;z-index:2}
+.custom-sel-rect{
+  position:absolute;background:rgba(24,100,171,.18);
+  border-top:2px solid rgba(24,100,171,.55);
+  border-bottom:2px solid rgba(24,100,171,.55);
+  border-radius:3px;box-sizing:border-box;
+}
 .at-cursor-beat{background:rgba(217,72,15,.85);width:3px}
 .at-highlight *{fill:#d9480f !important;stroke:#d9480f !important}
 
@@ -272,7 +280,7 @@ body.dragging{user-select:none;-webkit-user-select:none}
             </label>
             <label>捲動
               <select id="scrollMode">
-                <option value="ahead" selected>提早一行就捲動</option>
+                <option value="ahead" selected>倒數第二行末平緩捲動</option>
                 <option value="continuous">每換行就捲</option>
                 <option value="smooth">平滑持續</option>
                 <option value="off">不自動捲</option>
@@ -285,7 +293,7 @@ body.dragging{user-select:none;-webkit-user-select:none}
           </div>
 
           <div id="hint">
-            <span style="float:right;color:#999;font-size:11px">介面 v7</span>
+            <span style="float:right;color:#999;font-size:11px">介面 v7.2</span>
             點擊樂譜可跳轉；電腦拖曳或開啟「觸控框選」後手指拖曳可選取循環小節；播放時僅保留核心四鍵以放大譜面。
           </div>
         </div>
@@ -484,7 +492,7 @@ const startTimer = () => {
     }
   }, 30);
 };
-const stopTimer = () => { clearInterval(timer); timer = null; };
+const stopTimer = () => { clearInterval(timer); timer = null; if (scrollAnimRaf) { cancelAnimationFrame(scrollAnimRaf); scrollAnimRaf = null; } };
 
 audioEl.onended = () => { if (mode === "audio") { stopTimer(); api.stop(); } };
 $("#audioProgress").oninput = e => {
@@ -514,8 +522,47 @@ function scrollModeOf(v) {
   return { off: alphaTab.ScrollMode.Off, continuous: alphaTab.ScrollMode.Continuous, smooth: alphaTab.ScrollMode.Smooth }[v] ?? alphaTab.ScrollMode.Continuous;
 }
 
-// 換行提前一行（b - 2）
+// 換行控制：播放到畫面倒數第二行（b - 1）快結束時啟動平緩捲動，並在下一行開頭前完成定位
 let lastAhead = { target: -1, t: 0 };
+let scrollAnimRaf = null;
+
+function smoothScrollTo(el, targetY, durationMs) {
+  if (scrollAnimRaf) { cancelAnimationFrame(scrollAnimRaf); scrollAnimRaf = null; }
+  const startY = el.scrollTop;
+  const diff = targetY - startY;
+  if (Math.abs(diff) < 3) { el.scrollTop = targetY; return; }
+  const dur = Math.max(220, Math.min(950, durationMs));
+  const t0 = performance.now();
+  // easeInOutSine：起步柔和、中段穩定、到位不突兀，眼睛容易跟隨
+  const ease = p => -(Math.cos(Math.PI * p) - 1) / 2;
+  const step = now => {
+    const p = Math.min(1, (now - t0) / dur);
+    el.scrollTop = startY + diff * ease(p);
+    if (p < 1) {
+      scrollAnimRaf = requestAnimationFrame(step);
+    } else {
+      scrollAnimRaf = null;
+    }
+  };
+  scrollAnimRaf = requestAnimationFrame(step);
+}
+
+function estimateRemainingBarMs(beat, sys) {
+  const bpm = Math.max(20, (baseBpm || 120) * (curRate || 1));
+  const msPerQuarter = 60000 / bpm;
+  try {
+    if (beat && beat.voice && beat.voice.bar && beat.voice.bar.masterBar) {
+      const mb = beat.voice.bar.masterBar;
+      const barStart = mb.start;
+      const barDur = mb.calculateDuration();
+      const beatStart = beat.playbackStart ?? beat.absolutePlaybackStart ?? barStart;
+      const remTicks = Math.max(0, (barStart + barDur) - beatStart);
+      return (remTicks / 960) * msPerQuarter;
+    }
+  } catch (_) {}
+  return msPerQuarter * 1.5;
+}
+
 function aheadScroll(beat) {
   if ($("#scrollMode").value !== "ahead" || $("#layout").value === "horizontal") return;
   const bl = api.boundsLookup; if (!bl || !bl.isFinished || !bl.staffSystems.length) return;
@@ -524,22 +571,39 @@ function aheadScroll(beat) {
   const cy = bb.visualBounds.y + bb.visualBounds.h / 2;
   const idx = systems.findIndex(s => cy >= s.visualBounds.y && cy < s.visualBounds.y + s.visualBounds.h);
   if (idx < 0) return;
+
   const wrap = $("#scoreWrap"), off = $("#score").offsetTop, st = wrap.scrollTop, ch = wrap.clientHeight;
   let a = -1, b = -1;
   systems.forEach((s, i) => {
     const top = off + s.visualBounds.y, bot = top + s.visualBounds.h;
     if (top >= st - 4 && bot <= st + ch + 4) { if (a < 0) a = i; b = i; }
   });
-  const trigger = a < 0 ? -1 : Math.max(a, b - 2);
-  const lb = systems[idx].bars && systems[idx].bars.length ? systems[idx].bars[systems[idx].bars.length - 1] : null;
-  const atEnd = lb ? (bb.visualBounds.x >= lb.visualBounds.x + lb.visualBounds.w * 0.35) : true;
-  if (!(a < 0 || idx < a || idx > trigger || (idx === trigger && atEnd))) return;
-  const target = Math.max(0, off + systems[idx].visualBounds.y - 6);
+
+  // 畫面倒數第二行（b - 1）；若畫面僅容納 1~2 行則退回目前行 a
+  const trigger = a < 0 ? -1 : Math.max(a, b - 1);
+  const bars = systems[idx].bars || [];
+  const lb = bars.length ? bars[bars.length - 1] : null;
+  // 最後一小節過半（約第 3 拍起，52% 位置）即視為「快結束」，提前留出約 0.65~0.8 秒慢慢捲動
+  const nearLineEnd = lb ? (bb.visualBounds.x >= lb.visualBounds.x + lb.visualBounds.w * 0.52) : true;
+
+  const outOfView = (a < 0 || idx < a || idx > trigger);
+  const triggerAtEnd = (idx === trigger && nearLineEnd);
+  if (!outOfView && !triggerAtEnd) return;
+
+  // 若是在倒數第二行快結束時觸發，目標對齊目前行（讓下一行完整升進視野上方舒適區）；若已超出視野則對齊目前所在行
+  const targetIdx = triggerAtEnd ? idx : idx;
+  const maxScroll = Math.max(0, wrap.scrollHeight - ch);
+  const target = Math.max(0, Math.min(maxScroll, off + systems[targetIdx].visualBounds.y - 8));
   if (Math.abs(target - st) < 6) return;
+
   const now = performance.now();
-  if (Math.abs(target - lastAhead.target) < 2 && now - lastAhead.t < 800) return;
+  if (Math.abs(target - lastAhead.target) < 4 && now - lastAhead.t < 900) return;
   lastAhead = { target, t: now };
-  wrap.scrollTo({ top: target, behavior: "smooth" });
+
+  // 依目前行剩餘時間動態計算捲動時長（約 650ms~820ms，且保證在進入下一行前完成）
+  const remMs = estimateRemainingBarMs(beat, systems[idx]);
+  const scrollDur = outOfView ? 380 : Math.max(480, Math.min(820, remMs * 0.88));
+  smoothScrollTo(wrap, target, scrollDur);
 }
 
 function snapRate(r) {
@@ -599,6 +663,47 @@ function updateLoopBadge() {
   }
 }
 
+function renderCustomSelection() {
+  const scoreEl = $("#score");
+  if (!scoreEl) return;
+  let layer = $("#customSelLayer");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.id = "customSelLayer";
+    scoreEl.appendChild(layer);
+  }
+  layer.innerHTML = "";
+  if (loopStartBar == null || !api || !api.boundsLookup || !api.boundsLookup.isFinished) return;
+
+  const a = Math.min(loopStartBar, loopEndBar ?? loopStartBar);
+  const b = Math.max(loopStartBar, loopEndBar ?? loopStartBar);
+
+  for (const sys of api.boundsLookup.staffSystems) {
+    if (!sys.bars || !sys.bars.length) continue;
+    const matched = sys.bars.filter(barBounds => {
+      const idx = barBounds.masterBar ? barBounds.masterBar.index : barBounds.index;
+      return idx != null && idx >= a && idx <= b;
+    });
+    if (!matched.length) continue;
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const mb of matched) {
+      const vb = mb.visualBounds;
+      if (vb.x < minX) minX = vb.x;
+      if (vb.x + vb.w > maxX) maxX = vb.x + vb.w;
+      if (vb.y < minY) minY = vb.y;
+      if (vb.y + vb.h > maxY) maxY = vb.y + vb.h;
+    }
+    const box = document.createElement("div");
+    box.className = "custom-sel-rect";
+    box.style.left = minX + "px";
+    box.style.top = minY + "px";
+    box.style.width = Math.max(4, maxX - minX) + "px";
+    box.style.height = Math.max(12, maxY - minY) + "px";
+    layer.appendChild(box);
+  }
+}
+
 function applyBarRange(barA, barB, enableLoop = true) {
   if (!api || !api.score || !api.score.masterBars.length) return;
   const maxIdx = api.score.masterBars.length - 1;
@@ -622,6 +727,7 @@ function applyBarRange(barA, barB, enableLoop = true) {
     $("#loop").checked = true;
     try { api.isLooping = true; } catch (_) {}
   }
+  renderCustomSelection();
   updateLoopBadge();
 }
 
@@ -632,6 +738,7 @@ function clearLoopRange() {
     api.playbackRange = null;
     if (api.highlightPlaybackRange) api.highlightPlaybackRange(null, null);
   } catch (_) {}
+  renderCustomSelection();
   updateLoopBadge();
 }
 
@@ -707,7 +814,7 @@ $("#setLoopA").onclick = () => {
   if (!mb) return;
   loopStartBar = mb.index;
   if (loopEndBar != null && loopEndBar >= loopStartBar) applyBarRange(loopStartBar, loopEndBar, true);
-  else updateLoopBadge();
+  else { renderCustomSelection(); updateLoopBadge(); }
 };
 $("#setLoopB").onclick = () => {
   if (!api || !api.score) return;
@@ -760,6 +867,27 @@ function createApi() {
     setKit(score);
     api.renderTracks([score.tracks[idx]]);
   });
+  if (api.playbackRangeChanged) {
+    api.playbackRangeChanged.on(e => {
+      if (!e || !e.playbackRange || !api.score) {
+        if (loopStartBar != null || loopEndBar != null) {
+          loopStartBar = null; loopEndBar = null;
+          renderCustomSelection(); updateLoopBadge();
+        }
+        return;
+      }
+      const r = e.playbackRange;
+      const mbs = api.score.masterBars;
+      const sBar = mbs.find(b => r.startTick >= b.start && r.startTick < b.start + b.calculateDuration());
+      const eBar = [...mbs].reverse().find(b => r.endTick > b.start);
+      if (sBar && eBar) {
+        loopStartBar = sBar.index;
+        loopEndBar = eBar.index;
+        renderCustomSelection();
+        updateLoopBadge();
+      }
+    });
+  }
   if (!isExternal) {
     api.playerStateChanged.on(e => {
       if (e.state === 1) slavesStart(api.timePosition / 1000 + offset);
@@ -772,6 +900,12 @@ function createApi() {
     });
   }
   api.playedBeatChanged.on(aheadScroll);
+  if (api.postRenderFinished) {
+    api.postRenderFinished.on(() => {
+      renderCustomSelection();
+      patchScoreSvg($("#score"));
+    });
+  }
   api.playerReady.on(() => {
     bind();
     try { api.isLooping = $("#loop").checked; } catch (e) {}
